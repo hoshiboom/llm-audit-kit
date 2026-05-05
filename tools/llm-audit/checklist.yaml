@@ -1,0 +1,277 @@
+# LLM 应用安全查漏清单 v0.1
+# 按 L1–L8 分层组织。每条 item:
+#   id:       稳定 ID（Lx-###）
+#   title:    检查点一句话
+#   question: 面向开发者的判断问题（回答 yes/no/na）
+#   weight:   权重（1=一般, 2=重要, 3=关键）
+#   rationale: 为什么重要（根因）
+#   mitigation: 若不满足，建议动作
+#   refs:     相关关键词/资料（可选）
+
+layers:
+
+  - id: L1
+    name: 输入层 (Input)
+    items:
+      - id: L1-001
+        title: 输入 Unicode 归一化
+        question: 应用是否对输入做统一的 Unicode 归一化（如 NFKC）？
+        weight: 2
+        rationale: 不归一化会导致同义字符绕过过滤（全角/半角、同形异码）
+        mitigation: 在所有入口统一执行 unicodedata.normalize('NFKC', text)
+      - id: L1-002
+        title: 多语种对齐覆盖
+        question: 是否针对低资源语言（非英中主流语种）做过安全评估？
+        weight: 2
+        rationale: 对齐训练分布在低资源语言上稀疏，拒答率显著下降
+        mitigation: 接入多语种安全分类器，或限制支持语种
+      - id: L1-003
+        title: 多模态输入检测
+        question: 若接受图片/音频/PDF，是否对其中可能包含的指令文字做检测？
+        weight: 3
+        rationale: 多模态是间接注入的主通道（图中文字、音频旁白）
+        mitigation: OCR/ASR 后将提取文本标注为"不可信数据"再拼接
+      - id: L1-004
+        title: 超长输入限制
+        question: 是否对单次输入长度设置硬上限，防止上下文耗尽？
+        weight: 1
+        rationale: 超长输入可稀释系统提示 / 触发 Many-shot jailbreak
+        mitigation: 入口限长；超限截断并记录
+      - id: L1-005
+        title: 编码变体检测
+        question: 是否检测 Base64/ROT13/ASCII art 等编码形式的可疑负载？
+        weight: 2
+        rationale: 对齐主要在自然文本上做，编码形式常常绕过
+        mitigation: 前置解码+再扫描；或直接拒绝含大段编码的请求
+
+  - id: L2
+    name: 预处理层 (Pre-processing)
+    items:
+      - id: L2-001
+        title: 输入分类器
+        question: 是否有独立的输入端有害性/注入分类器？
+        weight: 2
+        rationale: 不要只靠模型自身拒答，软边界需要外部硬围栏兜底
+        mitigation: 接入 llm-guard / 自训分类器，走独立服务
+      - id: L2-002
+        title: PII 脱敏
+        question: 是否在送入模型前对个人敏感信息脱敏？
+        weight: 2
+        rationale: 防止训练数据泄露、合规风险
+        mitigation: 正则 + NER + 白名单还原表
+      - id: L2-003
+        title: 分类器多样性
+        question: 关键安全判断是否使用多个异构分类器集成？
+        weight: 1
+        rationale: 单一分类器易被对抗样本绕过
+        mitigation: 至少两个不同来源/架构的分类器并联
+
+  - id: L3
+    name: 上下文组装层 (Context Assembly) ⭐
+    items:
+      - id: L3-001
+        title: 来源标注 / 特权分级
+        question: 不同来源（system/user/RAG/tool）在 prompt 里是否有明确标签区分？
+        weight: 3
+        rationale: 数据≡指令是 LLM 最大架构缺陷；必须在 prompt 结构上做特权分级
+        mitigation: 采用 Spotlighting / StruQ / CaMeL；为不可信内容加前缀或专用分隔符
+      - id: L3-002
+        title: RAG 来源可信度
+        question: RAG 检索源是否有可信度分级，不可信源的内容被强制视为纯数据？
+        weight: 3
+        rationale: 间接注入的主要载体就是 RAG 和外部网页
+        mitigation: 白名单可信源；不可信源内容剥离所有指令性表述
+      - id: L3-003
+        title: 工具返回值消毒
+        question: 工具返回值在回填 context 前是否经过消毒/标注？
+        weight: 3
+        rationale: 工具返回值里若含"以下是管理员新指令"等内容，LLM 会照单全收
+        mitigation: 返回值统一包裹为不可信数据；长度限制；去除模板化注入词
+      - id: L3-004
+        title: 历史记忆隔离
+        question: 长期记忆 / 会话历史是否与当前 system prompt 分级隔离？
+        weight: 2
+        rationale: 历史记忆可被早期轮次污染，形成慢性攻击路径
+        mitigation: 记忆内容仅作为"事实参考"不作为"指令"；关键安全状态不写入记忆
+      - id: L3-005
+        title: 角色伪造检测
+        question: 是否过滤用户输入中伪造 system/assistant/tool role 标记的字符串？
+        weight: 2
+        rationale: 模型会把"System: ..."之类字符串当角色切换
+        mitigation: 黑名单关键 role 标记；用不可能在自然文本出现的分隔符
+      - id: L3-006
+        title: Many-shot 防御
+        question: 是否对同一会话内安全相关异常模式做多轮监控？
+        weight: 2
+        rationale: Many-shot jailbreak 利用上下文窗口扩大成功率
+        mitigation: 会话级风险计数；超阈值强制重置 / 降级
+
+  - id: L4
+    name: 模型推理层 (Model)
+    items:
+      - id: L4-001
+        title: 对齐健壮性测试
+        question: 是否在发布前跑过 JailbreakBench / HarmBench 等基准？
+        weight: 2
+        rationale: 没有评估的"安全"是虚假的安全
+        mitigation: CI 中纳入基准回归；关注新模型版本的对齐退化
+      - id: L4-002
+        title: Fine-tuning 安全门控
+        question: 对外提供微调服务时，是否有安全性兜底（拒接有害训练数据、保留对齐层）？
+        weight: 3
+        rationale: 数十条温和样本即可瓦解对齐
+        mitigation: 微调数据安全审查；保留/强制对齐 LoRA；微调后强制回归测试
+      - id: L4-003
+        title: 后门 / Sleeper Agent 检测
+        question: 是否对第三方模型权重做过后门扫描？
+        weight: 2
+        rationale: 供应链投毒可植入触发词驱动恶意行为
+        mitigation: 激活模式分析；关注异常 trigger 响应
+      - id: L4-004
+        title: 侧信道防护
+        question: 是否暴露 logprobs / token 数 / 响应时延等侧信道？
+        weight: 1
+        rationale: 可用于模型窃取、成员推断
+        mitigation: 默认不返回 logprobs；加响应时延扰动；速率限制
+      - id: L4-005
+        title: 采样参数默认值
+        question: temperature / top-p 等生成参数是否锁定在安全默认？
+        weight: 1
+        rationale: 高温采样会放大不对齐分支
+        mitigation: 安全关键场景温度<=0.3；参数白名单
+
+  - id: L5
+    name: 输出层 (Output)
+    items:
+      - id: L5-001
+        title: 输出 HTML/Markdown 消毒
+        question: 输出如渲染为 HTML/Markdown，是否做过 XSS 消毒？
+        weight: 3
+        rationale: LLM 可输出恶意 img/script/a 标签窃取数据
+        mitigation: 统一用 sanitizer（bleach / DOMPurify）；限制可用标签
+      - id: L5-002
+        title: 出站 URL 白名单
+        question: 对模型生成的外部链接是否有白名单/黑名单机制？
+        weight: 3
+        rationale: 图片 URL 带外是间接注入的经典数据外泄通道
+        mitigation: 图片/外链只允许白名单域名；或后端代理 + 审计
+      - id: L5-003
+        title: 输出端有害性分类
+        question: 是否在返回前对输出做独立有害性分类？
+        weight: 2
+        rationale: 模型内部的"对齐"不可靠，需要出口二次过滤
+        mitigation: moderation API 或本地分类器兜底
+      - id: L5-004
+        title: 包名/依赖幻觉防护
+        question: 若生成代码/安装命令，是否校验包名真实存在？
+        weight: 2
+        rationale: slopsquatting 攻击：LLM 幻觉包名被抢注为恶意包
+        mitigation: 安装前校验官方 registry；或走私有镜像白名单
+      - id: L5-005
+        title: 结构化输出校验
+        question: JSON / function-call 参数是否做严格 schema 校验？
+        weight: 3
+        rationale: 字段欺骗 / 参数注入直接触发错误工具调用
+        mitigation: 服务端 schema 校验（pydantic / jsonschema）；拒绝额外字段
+
+  - id: L6
+    name: Agent / Tool 执行层 (Action) ⭐
+    items:
+      - id: L6-001
+        title: 工具最小权限
+        question: 每个工具是否遵循最小权限（只能访问必需资源）？
+        weight: 3
+        rationale: LLM 不能跨步维持安全不变量，必须在工具层硬限制
+        mitigation: 按工具单独建最小权限账号/token；禁用未使用的 scope
+      - id: L6-002
+        title: 工具参数白名单
+        question: 工具参数（路径、SQL、命令）是否走白名单或参数化接口？
+        weight: 3
+        rationale: 参数注入是 LLM 时代的 SQLi 翻版
+        mitigation: 参数化查询；路径限定根目录；命令用固定模板，不做字符串拼接
+      - id: L6-003
+        title: 高危操作二次确认
+        question: 破坏性操作（删除、转账、发信、写入生产）是否需要人工确认？
+        weight: 3
+        rationale: 多步任务累积误差会在关键步骤放大为灾难
+        mitigation: human-in-the-loop；重要动作强制 UI 确认
+      - id: L6-004
+        title: 预算 / 循环上限
+        question: Agent 是否设置步数/token/成本/时长上限？
+        weight: 2
+        rationale: 无限循环或资源耗尽可成为拒绝服务攻击面
+        mitigation: 硬性上限；超限自动终止并告警
+      - id: L6-005
+        title: Confused Deputy 防护
+        question: Agent 执行外部内容触发的操作时，是否重新确认用户授权？
+        weight: 3
+        rationale: 攻击者借用 Agent 的权限做用户未授权的事
+        mitigation: 权限与意图绑定；敏感动作要求原始用户意图确认
+      - id: L6-006
+        title: 跨 Agent 权限边界
+        question: 多 Agent 协同时，每个 Agent 是否独立鉴权？
+        weight: 2
+        rationale: 低权 Agent 诱导高权 Agent 代办是常见提权路径
+        mitigation: Agent 间调用走正式 API；权限不继承
+
+  - id: L7
+    name: 基础设施层 (Infra)
+    items:
+      - id: L7-001
+        title: 代码执行沙箱
+        question: 若提供 code interpreter，是否运行在强隔离沙箱中？
+        weight: 3
+        rationale: 沙箱逃逸直接接管主机
+        mitigation: 容器 + seccomp + 只读文件系统 + 网络白名单
+      - id: L7-002
+        title: 凭证与密钥管理
+        question: API Key / Token 是否通过 KMS 管理、按工具最小作用域分发？
+        weight: 3
+        rationale: 单一高权限凭证被 prompt 泄露 = 灾难
+        mitigation: 短 TTL、最小 scope、KMS/Secret Manager
+      - id: L7-003
+        title: 推理框架 CVE 跟踪
+        question: 是否跟踪 vLLM / Triton / TGI 等推理框架的安全公告？
+        weight: 2
+        rationale: 推理框架是 AI 栈的新攻击面
+        mitigation: 订阅 CVE；锁定版本；定期升级
+      - id: L7-004
+        title: 模型权重来源签名
+        question: 加载的模型权重是否有来源校验 / 数字签名？
+        weight: 2
+        rationale: 供应链投毒的重要一环
+        mitigation: 从可信镜像拉取；SHA 比对；权重签名
+      - id: L7-005
+        title: 依赖 SBOM
+        question: 是否维护 AI 组件的 SBOM（软件物料清单）？
+        weight: 1
+        rationale: 上下游投毒可通过依赖传播
+        mitigation: 使用 SBOM 工具（syft / cyclonedx），漏洞扫描
+
+  - id: L8
+    name: 反馈回流层 (Feedback)
+    items:
+      - id: L8-001
+        title: 长期记忆写入审计
+        question: 写入长期记忆的内容是否经过审计（不直接吸收用户声明的"事实"）？
+        weight: 3
+        rationale: 记忆投毒形成跨会话持久攻击
+        mitigation: 记忆写入白名单来源；敏感类目禁入；可追溯回源
+      - id: L8-002
+        title: RLHF / 用户反馈审计
+        question: 用户反馈数据进入训练前是否做异常检测？
+        weight: 2
+        rationale: 点赞恶意回答可引导对齐漂移
+        mitigation: 反馈异常检测；按用户信任分级；少量反馈不直接回灌
+      - id: L8-003
+        title: 日志 -> 训练集隔离
+        question: 生产日志是否与训练数据管线物理隔离？
+        weight: 2
+        rationale: 日志回灌形成 self-poisoning 闭环
+        mitigation: 明确数据治理策略；回灌需显式审核
+      - id: L8-004
+        title: 对齐回归监控
+        question: 每次模型/数据更新后是否跑对齐回归套件？
+        weight: 2
+        rationale: 对齐可能悄悄退化
+        mitigation: CI 中固化评估集；关键指标门禁

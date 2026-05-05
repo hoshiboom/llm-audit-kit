@@ -1,0 +1,28 @@
+# ==== 通用 ====
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+.vscode/
+.idea/
+
+# ==== Python ====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# ==== llm-audit 工具产物 ====
+# example-answers.json 保留作为样例，其它输出忽略
+tools/llm-audit/report.md
+tools/llm-audit/report.json
+tools/llm-audit/example-report.*
+tools/llm-audit/my-answers.json
+
+# ==== 研究相关大文件（未来用）====
+datasets/
+data/raw/
+papers/**/*.pdf
