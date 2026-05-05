@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  audit-smoke:
+    name: audit smoke test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.8", "3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Checklist loads (non-interactive listing)
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python tools/llm-audit/audit.py --non-interactive | tee /tmp/list.txt
+          # Expect at least 30 checkpoints present (fails if parser breaks)
+          test "$(wc -l < /tmp/list.txt)" -ge 60
+
+      - name: Generate report from example answers
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python tools/llm-audit/audit.py \
+            --answers tools/llm-audit/example-answers.json \
+            --output /tmp/report.md \
+            --json-output /tmp/report.json
+          test -s /tmp/report.md
+          test -s /tmp/report.json
+
+      - name: Per-layer filter works
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python tools/llm-audit/audit.py --non-interactive --layer L3
+
+  lint:
+    name: basic file hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Required files exist
+        run: |
+          test -f README.md
+          test -f LICENSE
+          test -f CONTRIBUTING.md
+          test -f CODE_OF_CONDUCT.md
+          test -f tools/llm-audit/checklist.yaml
+          test -f tools/llm-audit/audit.py
+
+      - name: No tabs in checklist.yaml (YAML hates tabs)
+        run: |
+          ! grep -Pn '\t' tools/llm-audit/checklist.yaml

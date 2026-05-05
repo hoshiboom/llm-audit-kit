@@ -26,3 +26,6 @@ tools/llm-audit/my-answers.json
 datasets/
 data/raw/
 papers/**/*.pdf
+
+# ==== 作者私人运营备忘（不公开）====
+docs/launch-posts.md
