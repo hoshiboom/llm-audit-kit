@@ -12,6 +12,7 @@
 ![deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![checklist](https://img.shields.io/badge/checklist-40%2B%20items-orange)
 ![layers](https://img.shields.io/badge/layers-L1--L8-informational)
+[![CI](https://github.com/hoshiboom/llm-audit-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/hoshiboom/llm-audit-kit/actions/workflows/ci.yml)
 
 <!-- Demo GIF: 用 vhs/asciinema 录制后替换下面的链接 -->
 <!-- ![demo](docs/demo.gif) -->
